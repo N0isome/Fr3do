@@ -1,0 +1,4 @@
+customtkinter>=5.2,<6
+yt-dlp[default,curl-cffi]
+numpy
+demucs>=4,<5
