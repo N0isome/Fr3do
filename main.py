@@ -234,14 +234,23 @@ class AudioExtractorApp(ctk.CTk):
             self.output_var.set(selected)
 
     @staticmethod
-    def _valid_url(value):
+    def _source_kind(value):
         try:
             parsed = urlparse(value.strip())
             host = (parsed.hostname or "").lower()
-            return parsed.scheme in {"http", "https"} and (
-                host == "youtu.be" or host.endswith("youtube.com"))
+            if parsed.scheme not in {"http", "https"}:
+                return None
+            if host == "youtu.be" or host.endswith("youtube.com"):
+                return "youtube"
+            if host == "soundcloud.com" or host.endswith(".soundcloud.com"):
+                return "soundcloud"
         except ValueError:
-            return False
+            pass
+        return None
+
+    @classmethod
+    def _valid_url(cls, value):
+        return cls._source_kind(value) is not None
 
     def _start_download(self):
         if self.success_reset_id is not None:
@@ -251,8 +260,9 @@ class AudioExtractorApp(ctk.CTk):
         output_format = {"WAV": "wav", "MP3 320": "mp3"}.get(self.format_var.get())
         destination_text = self.output_var.get().strip()
         stems = self.stems_var.get()
-        if not self._valid_url(url):
-            self._append_log("ERROR // URL de YouTube inválida.")
+        source_kind = self._source_kind(url)
+        if source_kind is None:
+            self._append_log("ERROR // URL inválida. Usa YouTube o SoundCloud.")
             return
         if output_format is None:
             self._append_log("ERROR // Selecciona WAV o MP3 320.")
@@ -277,7 +287,7 @@ class AudioExtractorApp(ctk.CTk):
             return
         self._set_busy(True)
         self._set_progress(0, "LINK ANALYSIS", "INICIANDO")
-        self._append_log("RUN // Nueva operación iniciada.")
+        self._append_log(f"RUN // Nueva operación iniciada ({source_kind.upper()}).")
         self.executor.submit(self._worker, url, output_format, output_dir, stems)
 
     def _worker(self, url, output_format, output_dir, stems):
@@ -296,18 +306,52 @@ class AudioExtractorApp(ctk.CTk):
                 "outtmpl": str(temp_dir / "%(title).180B [%(id)s].%(ext)s"),
                 "noplaylist": True, "windowsfilenames": True, "quiet": True,
                 "no_warnings": True, "continuedl": True,
-                "concurrent_fragment_downloads": 8,
+                "concurrent_fragment_downloads": 4,
                 "buffersize": 1024 * 1024,
-                "http_chunk_size": 10 * 1024 * 1024,
-                "retries": 5,
+                "retries": 8,
                 "fragment_retries": 5, "socket_timeout": 20,
                 "logger": YTDLPLogger(self._emit_log),
                 "progress_hooks": [self._download_progress],
                 "postprocessors": [processor],
             }
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
-                title = clean_ansi(info.get("title", "audio")) or "audio"
+
+            source_kind = self._source_kind(url)
+            attempts = [("default", {})]
+            if source_kind == "youtube":
+                attempts.extend([
+                    ("web_embedded/IPv4", {
+                        "force_ipv4": True,
+                        "extractor_args": {"youtube": {"player_client": ["web_embedded"]}},
+                    }),
+                    ("android/IPv4", {
+                        "force_ipv4": True,
+                        "extractor_args": {"youtube": {"player_client": ["android"]}},
+                    }),
+                ])
+
+            last_error = None
+            for attempt_name, overrides in attempts:
+                attempt_options = dict(options)
+                attempt_options.update(overrides)
+                try:
+                    if attempt_name != "default":
+                        self._emit_log(f"RETRY // YouTube usando fallback {attempt_name}.")
+                    with yt_dlp.YoutubeDL(attempt_options) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                    title = clean_ansi(info.get("title", "audio")) or "audio"
+                    last_error = None
+                    break
+                except yt_dlp.utils.DownloadError as exc:
+                    last_error = exc
+                    if source_kind != "youtube" or attempt_name == attempts[-1][0]:
+                        raise
+                    self._emit_log(
+                        f"WARNING // Falló intento {attempt_name}: {clean_ansi(exc)}"
+                    )
+                    for partial in temp_dir.glob("*.part"):
+                        partial.unlink(missing_ok=True)
+            if last_error is not None:
+                raise last_error
             files = [p for p in temp_dir.iterdir()
                      if p.is_file() and p.suffix.lower() == f".{processing_format}"]
             if not files:
