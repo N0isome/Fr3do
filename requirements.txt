@@ -1,4 +1,4 @@
 customtkinter>=5.2,<6
-yt-dlp[default,curl-cffi]
+yt-dlp[default,curl-cffi]>=2026.8.19
 numpy
 demucs>=4,<5
