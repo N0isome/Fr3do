@@ -9,6 +9,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
+import webbrowser
+
+from sources import platform, resolve
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
@@ -71,6 +75,10 @@ class AudioExtractorApp(ctk.CTk):
         self.progress_segments = []
         self.channel_meters: dict[str, list[ctk.CTkFrame]] = {}
         self.last_progress_emit = 0.0
+        self.busy = False
+        self.batch_position = 0
+        self.batch_total = 1
+        self.spotify_client_id = os.environ.get("SPOTIPY_CLIENT_ID", "")
         self.output_var = ctk.StringVar(value=str(Path.home() / "Downloads"))
         self.url_var = ctk.StringVar()
         self.format_var = ctk.StringVar(value="")
@@ -128,7 +136,7 @@ class AudioExtractorApp(ctk.CTk):
                      text_color=MUTED).grid(row=0, column=0, padx=(0, 12))
         self.url_entry = ctk.CTkEntry(
             frame, textvariable=self.url_var, height=39, fg_color=CREAM,
-            text_color=CREAM_INK, placeholder_text="https://www.youtube.com/watch?v=...",
+            text_color=CREAM_INK, placeholder_text="Enlace de YouTube, SoundCloud o Spotify",
             placeholder_text_color="#746B5F", border_width=0, corner_radius=2,
             font=ctk.CTkFont(MONO_FONT, 11))
         self.url_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
@@ -152,6 +160,11 @@ class AudioExtractorApp(ctk.CTk):
             hover_color=RED_HOVER, border_width=1, border_color="#5C1C10",
             command=self._start_download)
         self.download_button.grid(row=0, column=4)
+        self.spotify_button = ctk.CTkButton(
+            frame, text="CONFIGURAR SPOTIFY", width=150, height=24,
+            fg_color=BEZEL, hover_color=PANEL_2,
+            command=self._configure_spotify)
+        self.spotify_button.grid(row=1, column=1, sticky="w", pady=(7, 0))
 
     def _progress(self, parent):
         frame = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=0)
@@ -233,17 +246,24 @@ class AudioExtractorApp(ctk.CTk):
         if selected:
             self.output_var.set(selected)
 
+    def _configure_spotify(self):
+        dialog = ctk.CTkInputDialog(
+            title="Conectar Spotify",
+            text="Client ID de tu app Spotify (sin Client Secret).\n"
+                 "Registra: http://127.0.0.1:8888/callback\n"
+                 "En modo desarrollo: playlists propias o colaborativas.")
+        value = dialog.get_input()
+        if value and value.strip():
+            self.spotify_client_id = value.strip()
+            self._append_log("SPOTIFY // Client ID configurado para esta sesión.")
+
     @staticmethod
     def _valid_url(value):
-        try:
-            parsed = urlparse(value.strip())
-            host = (parsed.hostname or "").lower()
-            return parsed.scheme in {"http", "https"} and (
-                host == "youtu.be" or host.endswith("youtube.com"))
-        except ValueError:
-            return False
+        return platform(value) is not None
 
     def _start_download(self):
+        if self.busy:
+            return
         if self.success_reset_id is not None:
             self.after_cancel(self.success_reset_id)
             self.success_reset_id = None
@@ -252,7 +272,7 @@ class AudioExtractorApp(ctk.CTk):
         destination_text = self.output_var.get().strip()
         stems = self.stems_var.get()
         if not self._valid_url(url):
-            self._append_log("ERROR // URL de YouTube inválida.")
+            self._append_log("ERROR // Ingresa un enlace de YouTube, SoundCloud o Spotify.")
             return
         if output_format is None:
             self._append_log("ERROR // Selecciona WAV o MP3 320.")
@@ -278,12 +298,116 @@ class AudioExtractorApp(ctk.CTk):
         self._set_busy(True)
         self._set_progress(0, "LINK ANALYSIS", "INICIANDO")
         self._append_log("RUN // Nueva operación iniciada.")
-        self.executor.submit(self._worker, url, output_format, output_dir, stems)
+        self.executor.submit(self._analyze, url, output_format, output_dir, stems,
+                             self.spotify_client_id)
 
-    def _worker(self, url, output_format, output_dir, stems):
+    def _analyze(self, url, output_format, output_dir, stems, client_id):
+        try:
+            collection = resolve(url, self._emit_log, client_id)
+            self.events.put(("preview", (collection, output_format, output_dir, stems)))
+        except Exception as exc:
+            self._emit_log(f"ERROR ANALYSIS // {clean_ansi(exc)}")
+            self.events.put(("failure", None))
+
+    def _show_preview(self, collection, output_format, output_dir, stems):
+        self._set_progress(0, "REVISAR SELECCIÓN", f"{len(collection.tracks)} PISTAS")
+        window = ctk.CTkToplevel(self)
+        window.title("Revisar pistas — " + collection.title)
+        window.geometry("850x560")
+        window.transient(self)
+        window.grab_set()
+        ctk.CTkLabel(window, text=collection.title, wraplength=780,
+                     font=ctk.CTkFont(DISPLAY_FONT, 20, "bold")).pack(pady=12)
+        note = "Selecciona las pistas que quieres descargar."
+        if collection.spotify:
+            note = "Spotify aporta la lista. Revisa las versiones de YouTube antes de descargar."
+        if collection.skipped:
+            note += f"\n{collection.skipped} entradas no disponibles o sin coincidencia."
+        ctk.CTkLabel(window, text=note, wraplength=780).pack(pady=(0, 8))
+        toolbar = ctk.CTkFrame(window, fg_color="transparent")
+        toolbar.pack(fill="x", padx=15)
+        checks = []
+        def select_all(value):
+            for var, _track in checks:
+                var.set(value)
+        ctk.CTkButton(toolbar, text="Seleccionar todas", command=lambda: select_all(True)).pack(side="left", padx=4)
+        ctk.CTkButton(toolbar, text="Limpiar selección", command=lambda: select_all(False)).pack(side="left", padx=4)
+        scroll = ctk.CTkScrollableFrame(window)
+        scroll.pack(fill="both", expand=True, padx=15, pady=12)
+        for track in collection.tracks:
+            # Spotify matches require explicit selection after review.
+            var = ctk.BooleanVar(value=not collection.spotify)
+            checks.append((var, track))
+            row = ctk.CTkFrame(scroll)
+            row.pack(fill="x", pady=4)
+            label = f"{track.index:03d} · {track.title}"
+            if track.original:
+                label = track.original + "\nYouTube: " + track.title
+            ctk.CTkCheckBox(row, text="", variable=var, width=30).pack(side="left", padx=8, pady=8)
+            ctk.CTkLabel(row, text=label, wraplength=570, justify="left",
+                         font=ctk.CTkFont(MONO_FONT, 11)).pack(side="left", padx=4, pady=8)
+            ctk.CTkButton(row, text="Abrir", width=55,
+                          command=lambda link=track.url: webbrowser.open(link)).pack(side="right", padx=8)
+        message = ctk.StringVar(value="")
+        ctk.CTkLabel(window, textvariable=message).pack()
+        def cancel():
+            window.destroy()
+            self._set_busy(False)
+            self._set_progress(0, "SYSTEM READY", "SELECCIÓN CANCELADA")
+        def confirm():
+            selected = [track for var, track in checks if var.get()]
+            if not selected:
+                message.set("Selecciona al menos una pista.")
+                return
+            window.destroy()
+            self.executor.submit(self._batch_worker, collection, selected,
+                                 output_format, output_dir, stems)
+        actions = ctk.CTkFrame(window, fg_color="transparent")
+        actions.pack(pady=12)
+        ctk.CTkButton(actions, text="Cancelar", command=cancel).pack(side="left", padx=8)
+        ctk.CTkButton(actions, text="Descargar selección", command=confirm).pack(side="left", padx=8)
+        window.protocol("WM_DELETE_WINDOW", cancel)
+
+    def _batch_worker(self, collection, tracks, output_format, output_dir, stems):
+        try:
+            target = output_dir
+            if collection.playlist:
+                target = self._unique_folder(output_dir, self._safe_name(collection.title))
+                target.mkdir(parents=True)
+            self.batch_total = len(tracks)
+            results = []
+            for position, track in enumerate(tracks):
+                self.batch_position = position
+                self.last_progress_emit = 0
+                self._emit_log(f"TRACK // {position + 1}/{len(tracks)}: {track.title}")
+                try:
+                    path = self._download_track(track, output_format, target, stems)
+                    results.append(dict(index=track.index, title=track.title,
+                                        original=track.original, source=track.url,
+                                        status="ok", output=str(path)))
+                except Exception as exc:
+                    self._emit_log(f"ERROR TRACK // {track.title}: {clean_ansi(exc)}")
+                    results.append(dict(index=track.index, title=track.title,
+                                        source=track.url, status="error", error=clean_ansi(exc)))
+                self._emit_progress((position + 1) / len(tracks), "PLAYLIST", f"{position + 1}/{len(tracks)} PROCESADAS")
+            report = self._unique_file(target, "fr3do-resultados.json")
+            report.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+            ok = sum(item["status"] == "ok" for item in results)
+            self._emit_log(f"RESULT // {ok} correctas; {len(tracks) - ok} fallidas. Reporte: {report}")
+            if ok == len(tracks):
+                self.events.put(("success", str(target)))
+            elif ok:
+                self.events.put(("partial", (ok, len(tracks), str(target))))
+            else:
+                self.events.put(("failure", None))
+        except Exception as exc:
+            self._emit_log(f"ERROR BATCH // {clean_ansi(exc)}")
+            self.events.put(("failure", None))
+
+    def _download_track(self, track, output_format, output_dir, stems):
         temp_dir = None
         try:
-            self._emit_progress(.02, "LINK ANALYSIS", "RESOLVIENDO FUENTE")
+            self._emit_progress(self.batch_position / self.batch_total, "LINK ANALYSIS", "RESOLVIENDO FUENTE")
             temp_dir = Path(tempfile.mkdtemp(prefix="fr3do_", dir=output_dir))
             # Demucs recibe WAV aunque el selector muestre MP3. Así no depende
             # de backends opcionales para decodificar MP3 en Windows.
@@ -293,7 +417,7 @@ class AudioExtractorApp(ctk.CTk):
                 processor["preferredquality"] = "320"
             options = {
                 "format": "bestaudio/best",
-                "outtmpl": str(temp_dir / "%(title).180B [%(id)s].%(ext)s"),
+                "outtmpl": str(temp_dir / f"{track.index:03d} - %(title).140B [%(id)s].%(ext)s"),
                 "noplaylist": True, "windowsfilenames": True, "quiet": True,
                 "no_warnings": True, "continuedl": True,
                 "concurrent_fragment_downloads": 8,
@@ -306,7 +430,7 @@ class AudioExtractorApp(ctk.CTk):
                 "postprocessors": [processor],
             }
             with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(track.url, download=True)
                 title = clean_ansi(info.get("title", "audio")) or "audio"
             files = [p for p in temp_dir.iterdir()
                      if p.is_file() and p.suffix.lower() == f".{processing_format}"]
@@ -314,7 +438,7 @@ class AudioExtractorApp(ctk.CTk):
                 raise RuntimeError("No se encontró el audio convertido.")
             source = max(files, key=lambda p: p.stat().st_mtime)
             if stems:
-                result = self._unique_folder(output_dir, self._safe_name(title))
+                result = self._unique_folder(output_dir, f"{track.index:03d} - {self._safe_name(title)}")
                 result.mkdir(parents=True)
                 audio_path = result / source.name
             else:
@@ -324,13 +448,7 @@ class AudioExtractorApp(ctk.CTk):
             self._emit_log(f"FILE // Audio guardado: {audio_path}")
             if stems:
                 self._run_demucs(audio_path, result, temp_dir)
-            self.events.put(("success", str(result)))
-        except yt_dlp.utils.DownloadError as exc:
-            self._emit_log(f"ERROR DOWNLOAD // {clean_ansi(exc)}")
-            self.events.put(("failure", None))
-        except Exception as exc:
-            self._emit_log(f"ERROR // {clean_ansi(exc)}")
-            self.events.put(("failure", None))
+            return result
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -346,7 +464,7 @@ class AudioExtractorApp(ctk.CTk):
             value = min(done / total, 1) if total else .03
             speed = clean_ansi(data.get("_speed_str") or "CALCULANDO")
             eta = clean_ansi(data.get("_eta_str") or "--:--")
-            self._emit_progress(value, "DOWNLOADING", f"{speed}  //  ETA {eta}")
+            self._emit_progress((self.batch_position + value * .9) / self.batch_total, "DOWNLOADING", f"{self.batch_position + 1}/{self.batch_total}  //  {speed}  //  ETA {eta}")
         elif data.get("status") == "finished":
             self._emit_progress(None, "TRANSCODING", "FFMPEG / AUDIO OUTPUT")
             self._emit_log("STAGE // Descarga completa; convirtiendo audio.")
@@ -414,6 +532,13 @@ class AudioExtractorApp(ctk.CTk):
                     self._append_log(payload)
                 elif event == "progress":
                     self._set_progress(*payload)
+                elif event == "preview":
+                    self._show_preview(*payload)
+                elif event == "partial":
+                    ok, total, target = payload
+                    self._set_progress(1, "COMPLETADO CON ERRORES", f"{ok}/{total} GUARDADAS")
+                    self._append_log(f"PARTIAL // Salida disponible: {target}")
+                    self._set_busy(False)
                 elif event == "success":
                     self._set_progress(1, "PROCESS COMPLETE", "OUTPUT READY")
                     self._append_log(f"DONE // Salida disponible: {payload}")
@@ -489,9 +614,10 @@ class AudioExtractorApp(ctk.CTk):
         self.log_box.configure(state="disabled")
 
     def _set_busy(self, busy):
+        self.busy = busy
         state = "disabled" if busy else "normal"
         for widget in (self.path_entry, self.browse_button, self.format_selector,
-                       self.stems_check, self.url_entry):
+                       self.stems_check, self.url_entry, self.spotify_button):
             widget.configure(state=state)
         self.download_button.configure(state=state,
                                        text="●  PROCESANDO" if busy else "●  EXTRAER",
@@ -513,3 +639,4 @@ class AudioExtractorApp(ctk.CTk):
 
 if __name__ == "__main__":
     AudioExtractorApp().mainloop()
+

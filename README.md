@@ -1,6 +1,6 @@
 # Fr3do Audio Extractor
 
-Aplicación de escritorio en Python para extraer audio de videos de YouTube en WAV o MP3 a 320 kbps. Opcionalmente separa el audio con Demucs en cuatro stems WAV: `vocals`, `drums`, `bass` y `other`.
+Aplicación de escritorio en Python para descargar canciones y playlists de YouTube y SoundCloud, e importar canciones, álbumes y playlists de Spotify buscando versiones en YouTube en WAV o MP3 a 320 kbps. Opcionalmente separa el audio con Demucs en cuatro stems WAV: `vocals`, `drums`, `bass` y `other`.
 
 > Utiliza la aplicación únicamente con contenido propio, con licencia o para el que tengas autorización. Respeta los derechos de autor y los términos aplicables.
 
@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force "C:\Users\PROV_ARF\Documents\App 2\Fr3do"
 Set-Location "C:\Users\PROV_ARF\Documents\App 2\Fr3do"
 ```
 
-Copia `main.py`, `requirements.txt` y este `README.md` dentro de esa carpeta.
+Copia `main.py`, `sources.py`, `requirements.txt` y este `README.md` dentro de esa carpeta.
 
 ## 3. Crear y activar el entorno virtual
 
@@ -92,21 +92,50 @@ python main.py
 
 ## 7. Uso
 
-1. Elige la carpeta de salida con **Examinar**.
-2. Selecciona obligatoriamente **WAV** o **MP3 · 320 kbps**.
-3. Marca **Separar Stems** si necesitas voces, batería, bajo y otros.
-4. Pega una URL de YouTube y pulsa **Descargar audio**.
-5. Revisa el progreso en la consola inferior.
+1. Elige la carpeta de salida con **EXPLORAR**.
+2. Selecciona **WAV** o **MP3 320**. Convertir a 320 kbps no mejora la calidad original.
+3. Activa **4-STEM** si quieres separar cada canción con Demucs.
+4. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa **EXTRAER**.
+5. Revisa la lista, selecciona todas o algunas pistas y pulsa **Descargar selección**.
 
-En una descarga básica, el audio final se guarda directamente en la carpeta elegida. Si activas Demucs, se crea `Carpeta elegida\Nombre de canción\`; dentro quedan exclusivamente `01 - Vocals.wav`, `02 - Drums.wav`, `03 - Bass.wav` y `04 - Other.wav`. El audio completo usado durante la separación se elimina al terminar correctamente.
+Los enlaces de video de YouTube que incluyan `list=` se analizan como playlist. Para descargar solo el video, usa su enlace sin ese parámetro. Las pistas privadas, retiradas o restringidas pueden omitirse o fallar.
 
-La barra principal muestra porcentaje, velocidad y tiempo restante. Durante la conversión y separación cambia a modo de actividad. El log queda reservado para hitos, rutas y errores.
+Las playlists se guardan en una carpeta con su nombre. Cada pista conserva su índice original; las canciones repetidas tienen nombres distintos. En modo 4-STEM se crea una subcarpeta por canción con las cuatro pistas WAV. El WAV intermedio se elimina cuando la separación termina correctamente.
 
-La descarga utiliza hasta 8 fragmentos concurrentes, un buffer de red de 1 MiB y bloques HTTP de 10 MiB cuando el servidor de YouTube admite esas modalidades. Los trabajos pesados se ejecutan mediante un `ThreadPoolExecutor`, fuera del hilo de la interfaz.
+El progreso indica canción actual y total seleccionado. FFmpeg y Demucs muestran actividad durante su procesamiento. Si una canción falla, la aplicación continúa con las demás y muestra un resultado parcial. `fr3do-resultados.json` registra fuentes, archivos guardados y errores. No se sobrescriben carpetas ni archivos anteriores.
 
-En modo stems, la aplicación convierte primero el stream a WAV aunque se haya seleccionado MP3. Esto evita fallos de decodificación de MP3 en Demucs sobre Windows; el archivo intermedio se elimina después de producir correctamente los cuatro stems.
+## 8. Conectar Spotify
 
-Al terminar correctamente, la URL se limpia, la carpeta seleccionada se conserva y la interfaz queda lista para otra descarga.
+Spotify aporta nombres y artistas; **el audio se obtiene desde YouTube**, nunca desde Spotify. No se garantiza que la coincidencia sea la misma versión. La vista previa muestra ambos títulos y un botón **Abrir** para revisar la fuente. Las coincidencias comienzan desmarcadas y requieren selección explícita.
+
+1. Crea una app en https://developer.spotify.com/dashboard.
+2. Registra exactamente `http://127.0.0.1:8888/callback` como Redirect URI.
+3. Copia el **Client ID**, pulsa **CONFIGURAR SPOTIFY** e introdúcelo. No hace falta Client Secret.
+4. Pega un enlace `https://open.spotify.com/playlist/...`, `/album/...` o `/track/...`.
+5. Autoriza el acceso en el navegador del equipo donde ejecutas Fr3do.
+
+También puedes definir el Client ID antes de ejecutar, en PowerShell:
+
+```powershell
+$env:SPOTIPY_CLIENT_ID = "tu_client_id"
+python main.py
+```
+
+Se utiliza OAuth PKCE y los tokens permanecen en memoria durante la importación, sin archivos de credenciales. Una nueva importación puede requerir autorización nuevamente. El puerto local 8888 debe estar libre.
+
+**Restricciones actuales de Spotify (2026):** en modo desarrollo, el dueño de la app debe tener Premium y el contenido de playlists solo se devuelve si el usuario conectado es dueño o colaborador. Los usuarios deben estar habilitados en la app. Una playlist pública de otra persona puede resultar inaccesible. Las pistas locales y episodios se omiten. La API puede limitar solicitudes.
+
+Referencias oficiales:
+- https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide
+- https://developer.spotify.com/documentation/web-api/reference/get-playlists-items
+
+## 9. Pruebas
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Las pruebas verifican resolución y paginación con respuestas simuladas, continuidad ante errores y conservación de archivos. No requieren cuentas ni descargan música. Las descargas reales y la autorización de Spotify requieren una prueba en el equipo de destino.
 
 ## Solución de problemas
 
@@ -115,3 +144,4 @@ Al terminar correctamente, la URL se limpia, la carpeta seleccionada se conserva
 - **Demucs se queda sin memoria:** cierra programas pesados. La primera ejecución también descarga el modelo de separación.
 - **YouTube rechaza la descarga:** actualiza yt-dlp con `python -m pip install -U yt-dlp`.
 - **PowerShell bloquea Activate.ps1:** ejecuta `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` en esa misma ventana.
+
