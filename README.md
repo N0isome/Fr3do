@@ -92,17 +92,17 @@ python main.py
 
 ## 7. Uso
 
-1. Elige la carpeta de salida con **EXPLORAR**.
-2. Selecciona **WAV** o **MP3 320**. Convertir a 320 kbps no mejora la calidad original.
-3. Activa **4-STEM** si quieres separar cada canción con Demucs.
-4. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa **EXTRAER**.
-5. Revisa la lista, selecciona todas o algunas pistas y pulsa **Descargar selección**.
+1. Elige la carpeta de salida con **Cambiar carpeta**.
+2. Selecciona **WAV** o **MP3**. Convertir a 320 kbps no mejora la calidad original.
+3. Activa **Separar instrumentos** si quieres separar cada canción con Demucs.
+4. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa **Revisar enlace**.
+5. Revisa la lista, selecciona todas o algunas pistas y pulsa **Descargar pistas**.
 
 Los enlaces de video de YouTube que incluyan `list=` se analizan como playlist. Para descargar solo el video, usa su enlace sin ese parámetro. Las pistas privadas, retiradas o restringidas pueden omitirse o fallar.
 
 Las playlists se guardan en una carpeta con su nombre. Cada pista conserva su índice original; las canciones repetidas tienen nombres distintos. En modo 4-STEM se crea una subcarpeta por canción con las cuatro pistas WAV. El WAV intermedio se elimina cuando la separación termina correctamente.
 
-El progreso indica canción actual y total seleccionado. FFmpeg y Demucs muestran actividad durante su procesamiento. Si una canción falla, la aplicación continúa con las demás y muestra un resultado parcial. `fr3do-resultados.json` registra fuentes, archivos guardados y errores. No se sobrescriben carpetas ni archivos anteriores.
+La selección está integrada en la ventana principal; las opciones de guardado están a la derecha. El progreso indica canción actual y total seleccionado. La barra conserva el último avance conocido durante FFmpeg y Demucs, sin animaciones. Las listas grandes muestran 50 pistas por página y conservan la selección entre páginas. El detalle de errores se abre con **Ver actividad**. Si una canción falla, la aplicación continúa con las demás y muestra un resultado parcial. `fr3do-resultados.json` registra fuentes, archivos guardados y errores. No se sobrescriben carpetas ni archivos anteriores.
 
 ## 8. Conectar Spotify
 
@@ -110,7 +110,7 @@ Spotify aporta nombres y artistas; **el audio se obtiene desde YouTube**, nunca 
 
 1. Crea una app en https://developer.spotify.com/dashboard.
 2. Registra exactamente `http://127.0.0.1:8888/callback` como Redirect URI.
-3. Copia el **Client ID**, pulsa **CONFIGURAR SPOTIFY** e introdúcelo. No hace falta Client Secret.
+3. Copia el **Client ID**, pulsa **Conectar Spotify** e introdúcelo. No hace falta Client Secret.
 4. Pega un enlace `https://open.spotify.com/playlist/...`, `/album/...` o `/track/...`.
 5. Autoriza el acceso en el navegador del equipo donde ejecutas Fr3do.
 
@@ -135,7 +135,7 @@ Referencias oficiales:
 python -m unittest discover -s tests -v
 ```
 
-Las pruebas verifican resolución y paginación con respuestas simuladas, continuidad ante errores y conservación de archivos. No requieren cuentas ni descargan música. Las descargas reales y la autorización de Spotify requieren una prueba en el equipo de destino.
+Las pruebas verifican resolución y paginación con respuestas simuladas, continuidad ante errores y conservación de archivos. Las pruebas de interfaz validan selección, navegación entre páginas, cambio de enlace y opciones de guardado; requieren una pantalla disponible (se omiten en entornos sin escritorio). No requieren cuentas ni descargan música. Las descargas reales y la autorización de Spotify requieren una prueba en el equipo de destino.
 
 ## Solución de problemas
 

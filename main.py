@@ -21,16 +21,13 @@ import customtkinter as ctk
 import yt_dlp
 from tkinter import filedialog
 
-APP_NAME = "FR3DO // Consola de Extracción"
-BG, PANEL, PANEL_2 = "#17140F", "#221D17", "#2B241C"
-LINE, BEZEL, CREAM, CREAM_INK = "#060504", "#0D0B08", "#EFE6D3", "#2B2417"
-RED, RED_DARK, RED_HOVER = "#E0603F", "#9C3521", "#C94B32"
-AMBER, TEXT, MUTED, LED = "#DFA23A", "#EFE6D3", "#5B554C", "#57D96A"
-DISPLAY_FONT, MONO_FONT = "Bahnschrift", "Cascadia Mono"
-CHANNEL_COLORS = {
-    "MASTER": "#C9C0AC", "VOCAL": "#E0603F", "DRUMS": "#DFA23A",
-    "BASS": "#3FA48E", "OTHER": "#8F79D6",
-}
+APP_NAME = "Fr3do — Biblioteca de audio"
+BG, PANEL, PANEL_2 = "#141816", "#1D2320", "#252D28"
+LINE, BEZEL, CREAM, CREAM_INK = "#354039", "#101411", "#F0EEE4", "#202B24"
+RED, RED_DARK, RED_HOVER = "#DDA57E", "#DDA57E", "#EDBB96"
+AMBER, TEXT, MUTED, LED = "#DDA57E", "#F0EEE4", "#A6B3A9", "#8BBC9F"
+DISPLAY_FONT = "Segoe UI" if os.name == "nt" else "DejaVu Sans"
+MONO_FONT = DISPLAY_FONT
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
@@ -62,18 +59,20 @@ class AudioExtractorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1120x790")
-        self.minsize(980, 720)
+        self.geometry("1140x840")
+        self.minsize(1000, 800)
         self.configure(fg_color=BG)
         ctk.set_appearance_mode("dark")
 
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fr3do-worker")
-        self.success_reset_id: str | None = None
-        self.activity_job: str | None = None
-        self.activity_step = 0
-        self.progress_segments = []
-        self.channel_meters: dict[str, list[ctk.CTkFrame]] = {}
+        self.collection = None
+        self.checks = []
+        self.track_widgets = []
+        self.analyzed_url = ""
+        self.operation = "idle"
+        self.log_visible = False
+        self.saved_output = None
         self.last_progress_emit = 0.0
         self.busy = False
         self.batch_position = 0
@@ -81,165 +80,206 @@ class AudioExtractorApp(ctk.CTk):
         self.spotify_client_id = os.environ.get("SPOTIPY_CLIENT_ID", "")
         self.output_var = ctk.StringVar(value=str(Path.home() / "Downloads"))
         self.url_var = ctk.StringVar()
-        self.format_var = ctk.StringVar(value="")
+        self.format_var = ctk.StringVar(value="MP3")
         self.stems_var = ctk.BooleanVar(value=False)
-        self.status_var = ctk.StringVar(value="SYSTEM READY")
-        self.progress_text_var = ctk.StringVar(value="00%")
-        self.transfer_var = ctk.StringVar(value="EN ESPERA")
+        self.status_var = ctk.StringVar(value="Listo para empezar")
+        self.transfer_var = ctk.StringVar(value="")
 
         self._build_ui()
+        self.url_var.trace_add("write", self._source_changed)
         self.protocol("WM_DELETE_WINDOW", self._close_app)
-        self.after(100, self._process_events)
+        self.event_job = self.after(150, self._process_events)
+
+    def _font(self, size=14, bold=False):
+        return ctk.CTkFont(DISPLAY_FONT, size, "bold" if bold else "normal")
+
+    def _button(self, parent, text, command, primary=False, **kwargs):
+        return ctk.CTkButton(
+            parent, text=text, command=command, height=38, corner_radius=8,
+            fg_color=AMBER if primary else PANEL_2,
+            hover_color=RED_HOVER if primary else LINE,
+            text_color=CREAM_INK if primary else TEXT,
+            text_color_disabled="#68766C", font=self._font(13, True), **kwargs)
 
     def _build_ui(self):
-        shell = ctk.CTkFrame(self, fg_color=PANEL, border_width=1, border_color=LINE, corner_radius=7)
-        shell.pack(fill="both", expand=True, padx=26, pady=24)
+        shell = ctk.CTkFrame(self, fg_color="transparent")
+        shell.pack(fill="both", expand=True, padx=30, pady=24)
         shell.grid_columnconfigure(0, weight=1)
-        shell.grid_rowconfigure(4, weight=1)
-        self._header(shell)
-        self._source(shell)
-        self._progress(shell)
-        self._channel_console(shell)
-        self._monitor(shell)
+        shell.grid_rowconfigure(2, weight=1)
+        header = ctk.CTkFrame(shell, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 24))
+        header.grid_columnconfigure(1, weight=1)
+        mark = ctk.CTkLabel(header, text="f", width=40, height=40,
+                           corner_radius=12, fg_color=AMBER,
+                           text_color=CREAM_INK, font=self._font(30, True))
+        mark.grid(row=0, column=0, rowspan=2, padx=(0, 12))
+        ctk.CTkLabel(header, text="fr3do", font=self._font(23, True),
+                     text_color=TEXT).grid(row=0, column=1, sticky="w")
+        ctk.CTkLabel(header, text="TU BIBLIOTECA DE AUDIO", font=self._font(10),
+                     text_color=MUTED).grid(row=1, column=1, sticky="w")
+        self.spotify_button = self._button(header, "Conectar Spotify", self._configure_spotify, width=155)
+        self.spotify_button.grid(row=0, column=2, rowspan=2)
 
-    def _header(self, parent):
-        frame = ctk.CTkFrame(parent, height=76, fg_color=BEZEL, corner_radius=6)
-        frame.grid(row=0, column=0, sticky="ew")
-        frame.grid_columnconfigure(1, weight=1)
-        power = ctk.CTkLabel(frame, text="", width=10, height=10, fg_color=LED, corner_radius=5)
-        power.grid(row=0, column=0, rowspan=2, padx=(24, 12))
-        ctk.CTkLabel(frame, text="FR3DO_", font=ctk.CTkFont(DISPLAY_FONT, 24, "bold"),
-                     text_color=TEXT).grid(row=0, column=1, sticky="sw", pady=(13, 0))
-        ctk.CTkLabel(frame, text="UNIDAD DE EXTRACCIÓN / MOTOR 4-STEM",
-                     font=ctk.CTkFont(MONO_FONT, 10), text_color=MUTED).grid(
-                         row=1, column=1, sticky="nw", pady=(0, 13))
-        destination = ctk.CTkFrame(frame, fg_color="transparent")
-        destination.grid(row=0, column=2, rowspan=2, sticky="e", padx=22, pady=17)
-        destination.grid_columnconfigure(0, weight=1)
-        self.path_entry = ctk.CTkEntry(
-            destination, textvariable=self.output_var, width=420, height=34,
-            fg_color=CREAM, text_color=CREAM_INK, border_width=1,
-            border_color="#000000", corner_radius=2, font=ctk.CTkFont(MONO_FONT, 11))
-        self.path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 9))
-        self.browse_button = ctk.CTkButton(
-            destination, text="EXPLORAR", width=92, height=34, corner_radius=2,
-            font=ctk.CTkFont(DISPLAY_FONT, 11, "bold"), fg_color=PANEL_2,
-            hover_color="#3A3127", border_width=1, border_color="#000000",
-            command=self._choose_folder)
-        self.browse_button.grid(row=0, column=1)
-
-    def _source(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=0)
-        frame.grid(row=1, column=0, sticky="ew", padx=22, pady=(17, 8))
-        frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(frame, text="FUENTE", font=ctk.CTkFont(DISPLAY_FONT, 11, "bold"),
-                     text_color=MUTED).grid(row=0, column=0, padx=(0, 12))
+        source = ctk.CTkFrame(shell, fg_color=PANEL, corner_radius=14)
+        source.grid(row=1, column=0, sticky="ew", pady=(0, 18))
+        source.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(source, text="De un enlace a tu biblioteca.", font=self._font(25, True),
+                     text_color=TEXT).grid(row=0, column=0, sticky="w", padx=22, pady=(18, 2))
+        ctk.CTkLabel(source, text="Pega una canción o playlist. Revisa las pistas y elige cómo guardarlas.",
+                     font=self._font(13), text_color=MUTED).grid(row=1, column=0, sticky="w", padx=22)
+        ctk.CTkLabel(source, text="YouTube  /  SoundCloud  /  Spotify", font=self._font(11),
+                     text_color=AMBER).grid(row=0, column=1, rowspan=2, sticky="e", padx=22)
         self.url_entry = ctk.CTkEntry(
-            frame, textvariable=self.url_var, height=39, fg_color=CREAM,
-            text_color=CREAM_INK, placeholder_text="Enlace de YouTube, SoundCloud o Spotify",
-            placeholder_text_color="#746B5F", border_width=0, corner_radius=2,
-            font=ctk.CTkFont(MONO_FONT, 11))
-        self.url_entry.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+            source, textvariable=self.url_var, height=46, fg_color=BEZEL,
+            text_color=TEXT, border_color=LINE, border_width=1, corner_radius=8,
+            placeholder_text="Pega el enlace aquí", placeholder_text_color=MUTED,
+            font=self._font(14))
+        self.url_entry.grid(row=2, column=0, sticky="ew", padx=(22, 12), pady=(16, 20))
         self.url_entry.bind("<Return>", lambda _event: self._start_download())
+        self.review_button = self._button(source, "Revisar enlace", self._start_download,
+                                          primary=True, width=155)
+        self.review_button.grid(row=2, column=1, padx=(0, 22), pady=(16, 20))
+
+        body = ctk.CTkFrame(shell, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew")
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0, minsize=292)
+        body.grid_rowconfigure(0, weight=1)
+        library = ctk.CTkFrame(body, fg_color=PANEL, corner_radius=14)
+        library.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        library.grid_columnconfigure(0, weight=1)
+        library.grid_rowconfigure(2, weight=1)
+        top = ctk.CTkFrame(library, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=20, pady=(17, 2))
+        top.grid_columnconfigure(0, weight=1)
+        self.collection_label = ctk.CTkLabel(top, text="Tus pistas", anchor="w",
+                                           font=self._font(19, True), text_color=TEXT)
+        self.collection_label.grid(row=0, column=0, sticky="ew")
+        self.count_label = ctk.CTkLabel(top, text="SIN ENLACE", font=self._font(10), text_color=MUTED)
+        self.count_label.grid(row=0, column=1, padx=(12, 0))
+        self.collection_note = ctk.CTkLabel(library, text="La selección aparecerá aquí.", anchor="w",
+                                          justify="left", wraplength=550,
+                                          font=self._font(12), text_color=MUTED)
+        self.collection_note.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 12))
+        self.track_area = ctk.CTkFrame(library, fg_color="transparent")
+        self.track_area.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 10))
+        self.track_area.grid_columnconfigure(0, weight=1)
+        self.track_area.grid_rowconfigure(0, weight=1)
+        self.selection_bar = ctk.CTkFrame(library, fg_color="transparent")
+        self.selection_bar.grid(row=3, column=0, sticky="ew", padx=20, pady=(2, 17))
+        self.all_button = self._button(self.selection_bar, "Todas", lambda: self._select_all(True), width=80)
+        self.all_button.pack(side="left", padx=(0, 8))
+        self.none_button = self._button(self.selection_bar, "Ninguna", lambda: self._select_all(False), width=85)
+        self.none_button.pack(side="left")
+        self.selection_label = ctk.CTkLabel(self.selection_bar, text="", font=self._font(12), text_color=MUTED)
+        self.selection_label.pack(side="right")
+        self.previous_button = self._button(self.selection_bar, "‹", lambda: self._change_page(-1), width=30)
+        self.next_button = self._button(self.selection_bar, "›", lambda: self._change_page(1), width=30)
+        self.page_label = ctk.CTkLabel(self.selection_bar, text="", font=self._font(11), text_color=MUTED)
+        self._empty_tracks()
+
+        export = ctk.CTkFrame(body, fg_color=PANEL, corner_radius=14, width=292)
+        export.grid(row=0, column=1, sticky="nsew")
+        export.grid_columnconfigure(0, weight=1)
+        export.grid_rowconfigure(8, weight=1)
+        ctk.CTkLabel(export, text="Guardar audio", font=self._font(19, True),
+                     text_color=TEXT).grid(row=0, column=0, sticky="w", padx=20, pady=(14, 10))
+        ctk.CTkLabel(export, text="FORMATO", font=self._font(10, True), text_color=MUTED).grid(
+            row=1, column=0, sticky="w", padx=20, pady=(0, 8))
         self.format_selector = ctk.CTkSegmentedButton(
-            frame, values=["WAV", "MP3 320"], variable=self.format_var,
-            width=165, height=34, corner_radius=2, border_width=0,
-            font=ctk.CTkFont(DISPLAY_FONT, 10, "bold"), fg_color=BEZEL,
-            selected_color=AMBER, selected_hover_color="#F2B94A",
-            unselected_color=BEZEL, unselected_hover_color="#312A21",
-            text_color=CREAM_INK, text_color_disabled=MUTED)
-        self.format_selector.grid(row=0, column=2, padx=(0, 12))
-        self.stems_check = ctk.CTkSwitch(
-            frame, text="4-STEM", variable=self.stems_var, width=90,
-            font=ctk.CTkFont(DISPLAY_FONT, 10, "bold"), progress_color="#3FA48E",
-            button_color=CREAM, button_hover_color="#FFFFFF", fg_color=BEZEL)
-        self.stems_check.grid(row=0, column=3, padx=(0, 12))
-        self.download_button = ctk.CTkButton(
-            frame, text="●  EXTRAER", width=125, height=39, corner_radius=3,
-            font=ctk.CTkFont(DISPLAY_FONT, 11, "bold"), fg_color=RED_DARK,
-            hover_color=RED_HOVER, border_width=1, border_color="#5C1C10",
-            command=self._start_download)
-        self.download_button.grid(row=0, column=4)
-        self.spotify_button = ctk.CTkButton(
-            frame, text="CONFIGURAR SPOTIFY", width=150, height=24,
-            fg_color=BEZEL, hover_color=PANEL_2,
-            command=self._configure_spotify)
-        self.spotify_button.grid(row=1, column=1, sticky="w", pady=(7, 0))
-
-    def _progress(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=0)
-        frame.grid(row=2, column=0, sticky="ew", padx=22, pady=(7, 14))
-        frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(frame, textvariable=self.status_var, font=ctk.CTkFont(DISPLAY_FONT, 10, "bold"),
-                     text_color=MUTED).grid(row=0, column=0, sticky="w", pady=(0, 7))
-        ctk.CTkLabel(frame, textvariable=self.transfer_var, font=ctk.CTkFont(DISPLAY_FONT, 10),
-                     text_color="#9A9186").grid(row=0, column=1, sticky="e", pady=(0, 7))
-        ctk.CTkLabel(frame, textvariable=self.progress_text_var, width=50,
-                     font=ctk.CTkFont(DISPLAY_FONT, 16, "bold"), text_color=LED).grid(
-                         row=0, column=2, padx=(12, 0), pady=(0, 7))
-        bar = ctk.CTkFrame(frame, height=18, fg_color=BEZEL, corner_radius=2)
-        bar.grid(row=1, column=0, columnspan=3, sticky="ew")
-        for i in range(40):
-            bar.grid_columnconfigure(i, weight=1)
-            segment = ctk.CTkFrame(bar, height=12, fg_color="#000000", corner_radius=1)
-            segment.grid(row=0, column=i, sticky="ew", padx=1, pady=3)
-            self.progress_segments.append(segment)
-
-    def _channel_console(self, parent):
-        console = ctk.CTkFrame(parent, fg_color=PANEL_2, corner_radius=0)
-        console.grid(row=3, column=0, sticky="nsew")
-        channels = [
-            ("MASTER", "#C9C0AC", 82), ("VOCAL", "#E0603F", 70),
-            ("DRUMS", "#DFA23A", 75), ("BASS", "#3FA48E", 68),
-            ("OTHER", "#8F79D6", 60),
-        ]
-        for column, (name, color, level) in enumerate(channels):
-            console.grid_columnconfigure(column, weight=1, uniform="channels")
-            strip = ctk.CTkFrame(console, fg_color=PANEL_2, border_width=1,
-                                 border_color="#0A0806", corner_radius=0)
-            strip.grid(row=0, column=column, sticky="nsew")
-            ctk.CTkFrame(strip, height=4, fg_color=color, corner_radius=0).pack(fill="x")
-            ctk.CTkLabel(strip, text=name, font=ctk.CTkFont(DISPLAY_FONT, 12, "bold"),
-                         text_color=TEXT).pack(pady=(9, 7))
-            meter = ctk.CTkFrame(strip, width=28, height=92, fg_color=BEZEL, corner_radius=2)
-            meter.pack()
-            meter.pack_propagate(False)
-            blocks = []
-            for _ in range(10):
-                block = ctk.CTkFrame(meter, height=6, fg_color="#241F18", corner_radius=1)
-                block.pack(side="bottom", fill="x", padx=4, pady=1)
-                blocks.append(block)
-            self.channel_meters[name] = blocks
-            slider = ctk.CTkSlider(
-                strip, from_=0, to=100, orientation="vertical", height=105, width=18,
-                fg_color=BEZEL, progress_color="#3A342A", button_color=color,
-                button_hover_color=color, border_width=0)
-            slider.set(level)
-            slider.pack(pady=(10, 7))
-            toggles = ctk.CTkFrame(strip, fg_color="transparent")
-            toggles.pack(pady=(0, 9))
-            for index, label in enumerate(("S", "M")):
-                ctk.CTkButton(
-                    toggles, text=label, width=27, height=21, corner_radius=2,
-                    fg_color=PANEL, hover_color=color, border_width=1,
-                    border_color="#000000", text_color=MUTED,
-                    font=ctk.CTkFont(DISPLAY_FONT, 9, "bold")
-                ).grid(row=0, column=index, padx=2)
-
-    def _monitor(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=0)
-        frame.grid(row=4, column=0, sticky="nsew", padx=22, pady=(13, 18))
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(frame, text="MONITOR DE EVENTOS",
-                     font=ctk.CTkFont(DISPLAY_FONT, 10, "bold"), text_color=MUTED).grid(
-                         row=0, column=0, sticky="w", pady=(0, 7))
-        self.log_box = ctk.CTkTextbox(
-            frame, height=80, fg_color=CREAM, text_color=CREAM_INK, border_width=0,
-            corner_radius=2, wrap="word", font=ctk.CTkFont(MONO_FONT, 10))
-        self.log_box.grid(row=1, column=0, sticky="nsew")
+            export, values=["MP3", "WAV"], variable=self.format_var, height=38,
+            font=self._font(13, True), fg_color=BEZEL,
+            selected_color=AMBER, selected_hover_color=RED_HOVER,
+            unselected_color=CREAM, unselected_hover_color="#D8DDCF",
+            text_color=CREAM_INK, corner_radius=8,
+            command=self._format_changed)
+        self.format_selector.grid(row=2, column=0, sticky="ew", padx=20)
+        self.format_note = ctk.CTkLabel(export, text="320 kbps · archivo compacto", font=self._font(11), text_color=MUTED)
+        self.format_note.grid(row=3, column=0, sticky="w", padx=20, pady=(6, 12))
+        ctk.CTkLabel(export, text="CARPETA DE DESTINO", font=self._font(10, True), text_color=MUTED).grid(
+            row=4, column=0, sticky="w", padx=20, pady=(0, 8))
+        self.path_entry = ctk.CTkEntry(export, textvariable=self.output_var, height=36,
+                                      fg_color=BEZEL, text_color=TEXT, border_color=LINE,
+                                      font=self._font(11), corner_radius=8)
+        self.path_entry.grid(row=5, column=0, sticky="ew", padx=20)
+        self.browse_button = self._button(export, "Cambiar carpeta", self._choose_folder, width=130)
+        self.browse_button.grid(row=6, column=0, sticky="w", padx=20, pady=(6, 12))
+        stems = ctk.CTkFrame(export, fg_color=PANEL_2, corner_radius=10)
+        stems.grid(row=7, column=0, sticky="ew", padx=20)
+        self.stems_check = ctk.CTkSwitch(stems, text="Separar instrumentos", variable=self.stems_var,
+                                        font=self._font(12), text_color=TEXT, progress_color=AMBER,
+                                        button_color=CREAM, button_hover_color=CREAM, fg_color=LINE,
+                                        command=self._format_changed)
+        self.stems_check.pack(anchor="w", padx=12, pady=(12, 5))
+        ctk.CTkLabel(stems, text="Voz, batería, bajo y otros.\nRequiere más tiempo de procesamiento.",
+                     justify="left", font=self._font(10), text_color=MUTED).pack(anchor="w", padx=12, pady=(0, 12))
+        footer = ctk.CTkFrame(shell, fg_color="transparent")
+        footer.grid(row=3, column=0, sticky="ew", pady=(18, 0))
+        footer.grid_columnconfigure(0, weight=1)
+        status_row = ctk.CTkFrame(footer, fg_color="transparent")
+        status_row.grid(row=0, column=0, sticky="ew", padx=(0, 18))
+        status_row.grid_columnconfigure(0, weight=1)
+        self.status_label = ctk.CTkLabel(status_row, textvariable=self.status_var, anchor="w",
+                                        font=self._font(12, True), text_color=MUTED)
+        self.status_label.grid(row=0, column=0, sticky="ew")
+        self.details_button = self._button(status_row, "Ver actividad", self._toggle_log, width=120)
+        self.details_button.grid(row=0, column=1)
+        self.download_button = self._button(footer, "Descargar selección", self._confirm_selection, primary=True, width=292)
+        self.download_button.grid(row=0, column=1, rowspan=3, sticky="nsew")
+        self.progress_bar = ctk.CTkProgressBar(footer, height=4, fg_color=LINE, progress_color=AMBER)
+        self.progress_bar.grid(row=1, column=0, sticky="ew", padx=(0, 18), pady=(8, 0))
+        self.progress_bar.set(0)
+        self.detail_label = ctk.CTkLabel(footer, textvariable=self.transfer_var, anchor="w",
+                                        font=self._font(10), text_color=MUTED)
+        self.detail_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self.log_box = ctk.CTkTextbox(shell, height=85, fg_color=BEZEL, text_color=MUTED,
+                                     font=self._font(11), corner_radius=8, wrap="word")
         self.log_box.configure(state="disabled")
-        self._append_log("SYS // Selecciona formato, define destino e ingresa una URL.")
+        self.log_box.grid(row=4, column=0, sticky="ew", pady=(8, 0))
+        self.log_box.grid_remove()
+        self._set_busy(False)
+
+    def _empty_tracks(self, message="Pega un enlace para empezar", detail="Revisa la lista antes de descargar.\nPuedes elegir todas las canciones o solo algunas."):
+        for widget in self.track_area.winfo_children():
+            widget.destroy()
+        empty = ctk.CTkFrame(self.track_area, fg_color="transparent")
+        empty.grid(row=0, column=0, sticky="nsew")
+        empty.grid_columnconfigure(0, weight=1)
+        empty.grid_rowconfigure(0, weight=1)
+        empty.grid_rowconfigure(4, weight=1)
+        ctk.CTkLabel(empty, text="♪", font=self._font(44), text_color=AMBER).grid(row=1, column=0, pady=(0, 10))
+        ctk.CTkLabel(empty, text=message, font=self._font(17, True), text_color=TEXT).grid(row=2, column=0)
+        ctk.CTkLabel(empty, text=detail, font=self._font(12), text_color=MUTED).grid(row=3, column=0, pady=(10, 0))
+        self.all_button.configure(state="disabled")
+        self.none_button.configure(state="disabled")
+        for widget in (self.previous_button, self.page_label, self.next_button):
+            widget.pack_forget()
+        self.selection_label.configure(text="")
+
+    def _toggle_log(self):
+        self.log_visible = not self.log_visible
+        if self.log_visible:
+            self.log_box.grid()
+        else:
+            self.log_box.grid_remove()
+        self.details_button.configure(text="Ocultar actividad" if self.log_visible else "Ver actividad")
+
+    def _format_changed(self, _value=None):
+        self.format_note.configure(text="Cuatro pistas WAV por canción" if self.stems_var.get() else
+                                  "320 kbps · archivo compacto" if self.format_var.get() == "MP3" else
+                                  "Sin compresión · archivo más grande")
+        self.format_selector.configure(state="disabled" if self.stems_var.get() or self.busy else "normal")
+
+    def _source_changed(self, *_args):
+        if self.collection and self.url_var.get().strip() != self.analyzed_url:
+            self.collection = None
+            self.checks = []
+            self.track_widgets = []
+            self.collection_label.configure(text="Tus pistas")
+            self.count_label.configure(text="SIN REVISAR")
+            self.collection_note.configure(text="Revisa el nuevo enlace para continuar.")
+            self._empty_tracks()
+            self.download_button.configure(state="disabled", text="Descargar selección")
 
     def _choose_folder(self):
         selected = filedialog.askdirectory(initialdir=self.output_var.get())
@@ -264,42 +304,31 @@ class AudioExtractorApp(ctk.CTk):
     def _start_download(self):
         if self.busy:
             return
-        if self.success_reset_id is not None:
-            self.after_cancel(self.success_reset_id)
-            self.success_reset_id = None
         url = self.url_var.get().strip()
-        output_format = {"WAV": "wav", "MP3 320": "mp3"}.get(self.format_var.get())
-        destination_text = self.output_var.get().strip()
-        stems = self.stems_var.get()
         if not self._valid_url(url):
-            self._append_log("ERROR // Ingresa un enlace de YouTube, SoundCloud o Spotify.")
+            self._notice("Ingresa un enlace de YouTube, SoundCloud o Spotify.")
             return
-        if output_format is None:
-            self._append_log("ERROR // Selecciona WAV o MP3 320.")
-            return
-        if not destination_text:
-            self._append_log("ERROR // Selecciona una carpeta de destino.")
-            return
-        if stems and importlib.util.find_spec("demucs") is None:
-            self._append_log("ERROR // Demucs no está instalado en este entorno.")
-            return
-        output_dir = Path(destination_text).expanduser()
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            probe = output_dir / ".fr3do_write_test"
-            probe.touch()
-            probe.unlink()
-        except OSError as exc:
-            self._append_log(f"ERROR // No se puede escribir en el destino: {exc}")
-            return
-        if shutil.which("ffmpeg") is None:
-            self._append_log("ERROR // FFmpeg no aparece en PATH.")
-            return
+        if platform(url) == "spotify" and not self.spotify_client_id:
+            self._configure_spotify()
+            if not self.spotify_client_id:
+                self._notice("Conecta Spotify para revisar este enlace.")
+                return
+        self.collection = None
+        self.checks = []
+        self.track_widgets = []
+        self.operation = "analysis"
+        self.analyzed_url = url
+        self._empty_tracks("Revisando tu enlace…", "Buscando las pistas disponibles.\nNo se descargará audio hasta que confirmes.")
+        self.collection_label.configure(text="Tus pistas")
+        self.count_label.configure(text="REVISANDO")
         self._set_busy(True)
-        self._set_progress(0, "LINK ANALYSIS", "INICIANDO")
-        self._append_log("RUN // Nueva operación iniciada.")
-        self.executor.submit(self._analyze, url, output_format, output_dir, stems,
-                             self.spotify_client_id)
+        self._set_progress(None, "LINK ANALYSIS", "Esto puede tardar en playlists grandes.")
+        self.executor.submit(self._analyze, url, None, None, None, self.spotify_client_id)
+
+    def _notice(self, message):
+        self.status_label.configure(text_color=AMBER)
+        self.status_var.set(message)
+        self._append_log(message)
 
     def _analyze(self, url, output_format, output_dir, stems, client_id):
         try:
@@ -309,64 +338,130 @@ class AudioExtractorApp(ctk.CTk):
             self._emit_log(f"ERROR ANALYSIS // {clean_ansi(exc)}")
             self.events.put(("failure", None))
 
-    def _show_preview(self, collection, output_format, output_dir, stems):
-        self._set_progress(0, "REVISAR SELECCIÓN", f"{len(collection.tracks)} PISTAS")
-        window = ctk.CTkToplevel(self)
-        window.title("Revisar pistas — " + collection.title)
-        window.geometry("850x560")
-        window.transient(self)
-        window.grab_set()
-        ctk.CTkLabel(window, text=collection.title, wraplength=780,
-                     font=ctk.CTkFont(DISPLAY_FONT, 20, "bold")).pack(pady=12)
-        note = "Selecciona las pistas que quieres descargar."
+    def _show_preview(self, collection, output_format=None, output_dir=None, stems=None):
+        self.collection = collection
+        self.checks = []
+        self.track_widgets = []
+        for widget in self.track_area.winfo_children():
+            widget.destroy()
+        self.collection_label.configure(text=collection.title[:45])
+        self.count_label.configure(text=f"{len(collection.tracks)} PISTAS")
+        note = (platform(collection.tracks[0].url) or "Audio").capitalize() + " · Elige las canciones que quieres guardar."
         if collection.spotify:
-            note = "Spotify aporta la lista. Revisa las versiones de YouTube antes de descargar."
+            note = "Lista de Spotify · Audio de YouTube. Revisa cada versión antes de seleccionarla."
         if collection.skipped:
-            note += f"\n{collection.skipped} entradas no disponibles o sin coincidencia."
-        ctk.CTkLabel(window, text=note, wraplength=780).pack(pady=(0, 8))
-        toolbar = ctk.CTkFrame(window, fg_color="transparent")
-        toolbar.pack(fill="x", padx=15)
-        checks = []
-        def select_all(value):
-            for var, _track in checks:
-                var.set(value)
-        ctk.CTkButton(toolbar, text="Seleccionar todas", command=lambda: select_all(True)).pack(side="left", padx=4)
-        ctk.CTkButton(toolbar, text="Limpiar selección", command=lambda: select_all(False)).pack(side="left", padx=4)
-        scroll = ctk.CTkScrollableFrame(window)
-        scroll.pack(fill="both", expand=True, padx=15, pady=12)
-        for track in collection.tracks:
-            # Spotify matches require explicit selection after review.
-            var = ctk.BooleanVar(value=not collection.spotify)
-            checks.append((var, track))
-            row = ctk.CTkFrame(scroll)
-            row.pack(fill="x", pady=4)
-            label = f"{track.index:03d} · {track.title}"
+            note += f" {collection.skipped} entradas no disponibles."
+        self.collection_note.configure(text=note)
+        self.checks = [(ctk.BooleanVar(value=not collection.spotify), track) for track in collection.tracks]
+        for var, _track in self.checks:
+            var.trace_add("write", lambda *_: self._selection_changed())
+        self.track_page = 0
+        self._render_track_page()
+        self.operation = "idle"
+        self._set_busy(False)
+        self._set_progress(0, "REVISAR SELECCIÓN", "")
+        self._selection_changed()
+
+    def _render_track_page(self):
+        for widget in self.track_area.winfo_children():
+            widget.destroy()
+        self.track_widgets = []
+        scroll = ctk.CTkScrollableFrame(self.track_area, fg_color="transparent", corner_radius=0,
+                                        scrollbar_button_color=LINE, scrollbar_button_hover_color=MUTED)
+        scroll.grid(row=0, column=0, sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
+        start = self.track_page * 50
+        for number, (var, track) in enumerate(self.checks[start:start + 50]):
+            row = ctk.CTkFrame(scroll, fg_color=PANEL_2, corner_radius=9)
+            row.grid(row=number, column=0, sticky="ew", pady=(0, 6))
+            row.grid_columnconfigure(2, weight=1)
+            check = ctk.CTkCheckBox(row, text="", variable=var, width=26,
+                                   checkbox_width=20, checkbox_height=20,
+                                   fg_color=AMBER, hover_color=RED_HOVER,
+                                   border_color="#68796C", checkmark_color=CREAM_INK,
+                                   corner_radius=5, border_width=1)
+            check.grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=14)
+            ctk.CTkLabel(row, text=f"{track.index:02d}", width=25, text_color=MUTED,
+                         font=self._font(11)).grid(row=0, column=1, rowspan=2, padx=(0, 12))
+            title = ctk.CTkLabel(row, text=track.original or track.title, anchor="w", justify="left",
+                                 wraplength=340, height=22, text_color=TEXT, font=self._font(13, True))
             if track.original:
-                label = track.original + "\nYouTube: " + track.title
-            ctk.CTkCheckBox(row, text="", variable=var, width=30).pack(side="left", padx=8, pady=8)
-            ctk.CTkLabel(row, text=label, wraplength=570, justify="left",
-                         font=ctk.CTkFont(MONO_FONT, 11)).pack(side="left", padx=4, pady=8)
-            ctk.CTkButton(row, text="Abrir", width=55,
-                          command=lambda link=track.url: webbrowser.open(link)).pack(side="right", padx=8)
-        message = ctk.StringVar(value="")
-        ctk.CTkLabel(window, textvariable=message).pack()
-        def cancel():
-            window.destroy()
-            self._set_busy(False)
-            self._set_progress(0, "SYSTEM READY", "SELECCIÓN CANCELADA")
-        def confirm():
-            selected = [track for var, track in checks if var.get()]
-            if not selected:
-                message.set("Selecciona al menos una pista.")
-                return
-            window.destroy()
-            self.executor.submit(self._batch_worker, collection, selected,
-                                 output_format, output_dir, stems)
-        actions = ctk.CTkFrame(window, fg_color="transparent")
-        actions.pack(pady=12)
-        ctk.CTkButton(actions, text="Cancelar", command=cancel).pack(side="left", padx=8)
-        ctk.CTkButton(actions, text="Descargar selección", command=confirm).pack(side="left", padx=8)
-        window.protocol("WM_DELETE_WINDOW", cancel)
+                title.grid(row=0, column=2, sticky="ew", pady=(10, 0))
+                ctk.CTkLabel(row, text="YouTube: " + track.title, anchor="w", justify="left", wraplength=340,
+                             height=16, text_color=MUTED, font=self._font(10)).grid(
+                                 row=1, column=2, sticky="ew", pady=(0, 10))
+            else:
+                title.grid(row=0, column=2, rowspan=2, sticky="ew", pady=12)
+            open_button = self._button(row, "Abrir", lambda link=track.url: webbrowser.open(link), width=56)
+            open_button.grid(row=0, column=3, rowspan=2, padx=10)
+            self.track_widgets.append(check)
+        pages = (len(self.checks) + 49) // 50
+        for widget in (self.previous_button, self.page_label, self.next_button):
+            widget.pack_forget()
+        if pages > 1:
+            self.previous_button.pack(side="left", padx=(12, 4))
+            self.page_label.pack(side="left", padx=4)
+            self.next_button.pack(side="left", padx=4)
+            self.page_label.configure(text=f"{self.track_page + 1} / {pages}")
+            self.previous_button.configure(state="normal" if self.track_page else "disabled")
+            self.next_button.configure(state="normal" if self.track_page < pages - 1 else "disabled")
+
+    def _change_page(self, delta):
+        if self.busy or not self.collection:
+            return
+        pages = (len(self.checks) + 49) // 50
+        self.track_page = max(0, min(self.track_page + delta, pages - 1))
+        self._render_track_page()
+
+    def _select_all(self, value):
+        if not self.busy:
+            self._updating_selection = True
+            try:
+                for var, _track in self.checks:
+                    var.set(value)
+            finally:
+                self._updating_selection = False
+            self._selection_changed()
+
+    def _selection_changed(self):
+        if getattr(self, "_updating_selection", False):
+            return
+        count = sum(var.get() for var, _track in self.checks)
+        self.selection_label.configure(text=f"{count} seleccionadas")
+        self.download_button.configure(text=f"Descargar {count} pista{'s' if count != 1 else ''}" if count else "Selecciona pistas",
+                                       state="normal" if count and not self.busy else "disabled")
+
+    def _confirm_selection(self):
+        if self.busy or not self.collection:
+            return
+        selected = [track for var, track in self.checks if var.get()]
+        if not selected:
+            self._notice("Selecciona al menos una pista.")
+            return
+        stems = self.stems_var.get()
+        output_format = "wav" if self.format_var.get() == "WAV" else "mp3"
+        destination_text = self.output_var.get().strip()
+        if not destination_text:
+            self._notice("Elige una carpeta de destino.")
+            return
+        if stems and importlib.util.find_spec("demucs") is None:
+            self._notice("Instala Demucs para separar instrumentos.")
+            return
+        if shutil.which("ffmpeg") is None:
+            self._notice("FFmpeg no está disponible. Revisa su instalación.")
+            return
+        output_dir = Path(destination_text).expanduser()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=output_dir):
+                pass
+        except OSError:
+            self._notice("No se puede escribir en esta carpeta. Elige otra.")
+            return
+        self.operation = "download"
+        self._set_busy(True)
+        self._set_progress(0, "DOWNLOADING", f"{len(selected)} pistas en la selección")
+        self.executor.submit(self._batch_worker, self.collection, selected, output_format, output_dir, stems)
 
     def _batch_worker(self, collection, tracks, output_format, output_dir, stems):
         try:
@@ -525,87 +620,53 @@ class AudioExtractorApp(ctk.CTk):
         self.events.put(("progress", (value, stage, detail)))
 
     def _process_events(self):
-        try:
-            while True:
+        # Bound each pass so a large queue cannot monopolize the UI thread.
+        for _ in range(60):
+            try:
                 event, payload = self.events.get_nowait()
-                if event == "log":
-                    self._append_log(payload)
-                elif event == "progress":
-                    self._set_progress(*payload)
-                elif event == "preview":
-                    self._show_preview(*payload)
+            except queue.Empty:
+                break
+            if event == "log":
+                self._append_log(payload)
+            elif event == "progress":
+                self._set_progress(*payload)
+            elif event == "preview":
+                self._show_preview(*payload)
+            elif event in {"success", "partial", "failure"}:
+                self.operation = "idle"
+                self._set_busy(False)
+                if event == "success":
+                    self.saved_output = payload
+                    self._set_progress(1, "PROCESS COMPLETE", "Archivos guardados en la carpeta elegida.")
+                    self._append_log(f"Salida disponible: {payload}")
                 elif event == "partial":
                     ok, total, target = payload
-                    self._set_progress(1, "COMPLETADO CON ERRORES", f"{ok}/{total} GUARDADAS")
-                    self._append_log(f"PARTIAL // Salida disponible: {target}")
-                    self._set_busy(False)
-                elif event == "success":
-                    self._set_progress(1, "PROCESS COMPLETE", "OUTPUT READY")
-                    self._append_log(f"DONE // Salida disponible: {payload}")
-                    self.url_var.set("")
-                    self._set_busy(False)
-                    self.download_button.configure(
-                        text="SUCCESS  ✓", fg_color="#235C35", hover_color="#235C35"
-                    )
-                    self.success_reset_id = self.after(1600, self._reset_success_state)
-                    self.url_entry.focus_set()
-                elif event == "failure":
-                    self._stop_activity()
-                    for index, segment in enumerate(self.progress_segments):
-                        segment.configure(fg_color=RED if index < 5 else "#000000")
-                    self.status_var.set("PROCESS FAILED")
-                    self.transfer_var.set("REVISA EVENT MONITOR")
-                    self.progress_text_var.set("ERR")
-                    self._set_busy(False)
-        except queue.Empty:
-            pass
-        self.after(100, self._process_events)
+                    self.saved_output = target
+                    self._set_progress(1, "COMPLETADO CON ERRORES", f"{ok} de {total} pistas guardadas. Consulta la actividad.")
+                else:
+                    self._set_progress(0, "PROCESS FAILED", "Revisa el detalle en actividad.")
+        self.event_job = self.after(150, self._process_events)
 
     def _set_progress(self, value, stage, detail):
-        self.status_var.set(stage)
+        labels = {
+            "LINK ANALYSIS": "Revisando enlace",
+            "REVISAR SELECCIÓN": "Lista para descargar",
+            "DOWNLOADING": "Descargando audio",
+            "TRANSCODING": "Convirtiendo audio",
+            "STEM SEPARATION": "Separando instrumentos",
+            "PLAYLIST": "Procesando selección",
+            "PROCESS COMPLETE": "Descarga completa",
+            "COMPLETADO CON ERRORES": "Descarga completada con errores",
+            "PROCESS FAILED": "No se pudo completar",
+            "SYSTEM READY": "Listo para empezar",
+        }
+        self.status_label.configure(text_color=LED if stage == "PROCESS COMPLETE" else
+                                    AMBER if stage in {"PROCESS FAILED", "COMPLETADO CON ERRORES"} else MUTED)
+        self.status_var.set(labels.get(stage, stage))
         self.transfer_var.set(detail)
-        if value is None:
-            if self.activity_job is None:
-                self.activity_step = 0
-                self._animate_activity()
-            self.progress_text_var.set("•••")
-        else:
-            self._stop_activity()
-            value = max(0, min(value, 1))
-            lit = round(value * len(self.progress_segments))
-            for index, segment in enumerate(self.progress_segments):
-                if index < lit:
-                    color = RED if index >= 34 else LED
-                else:
-                    color = "#000000"
-                segment.configure(fg_color=color)
-            master_lit = round(value * 10)
-            for name, blocks in self.channel_meters.items():
-                channel_lit = master_lit if name == "MASTER" else max(1, master_lit - 2)
-                color = CHANNEL_COLORS[name]
-                for index, block in enumerate(blocks):
-                    block.configure(fg_color=color if index < channel_lit else "#241F18")
-            self.progress_text_var.set(f"{round(value * 100):02d}%")
-
-    def _animate_activity(self):
-        """Animación de procesamiento para FFmpeg y Demucs sin simular porcentaje."""
-        total = len(self.progress_segments)
-        for index, segment in enumerate(self.progress_segments):
-            distance = (index - self.activity_step) % total
-            color = RED if distance == 7 else LED if distance < 7 else "#000000"
-            segment.configure(fg_color=color)
-        for channel_index, (name, blocks) in enumerate(self.channel_meters.items()):
-            color = CHANNEL_COLORS[name]
-            height = 3 + ((self.activity_step + channel_index * 2) % 7)
-            for index, block in enumerate(blocks):
-                block.configure(fg_color=color if index < height else "#241F18")
-        self.activity_step = (self.activity_step + 1) % max(total, 1)
-        self.activity_job = self.after(90, self._animate_activity)
-
-    def _stop_activity(self):
-        if self.activity_job is not None:
-            self.after_cancel(self.activity_job)
-            self.activity_job = None
+        # Keep the last known percentage during FFmpeg/Demucs; no animation loop.
+        if value is not None:
+            self.progress_bar.set(max(0, min(value, 1)))
 
     def _append_log(self, message):
         self.log_box.configure(state="normal")
@@ -616,23 +677,25 @@ class AudioExtractorApp(ctk.CTk):
     def _set_busy(self, busy):
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for widget in (self.path_entry, self.browse_button, self.format_selector,
-                       self.stems_check, self.url_entry, self.spotify_button):
+        for widget in (self.path_entry, self.browse_button, self.stems_check,
+                       self.url_entry, self.spotify_button, self.review_button):
             widget.configure(state=state)
-        self.download_button.configure(state=state,
-                                       text="●  PROCESANDO" if busy else "●  EXTRAER",
-                                       fg_color=RED_DARK, hover_color=RED_HOVER)
-
-    def _reset_success_state(self):
-        """Deja la unidad lista sin borrar la carpeta elegida."""
-        self.success_reset_id = None
-        self._set_progress(0, "SYSTEM READY", "LAST EXPORT OK")
-        self.download_button.configure(
-            text="●  EXTRAER", fg_color=RED_DARK, hover_color=RED_HOVER
-        )
+        for widget in self.track_widgets:
+            widget.configure(state=state)
+        self.all_button.configure(state="normal" if self.collection and not busy else "disabled")
+        self.none_button.configure(state="normal" if self.collection and not busy else "disabled")
+        self.review_button.configure(text="Revisando…" if busy and self.operation == "analysis" else "Revisar enlace")
+        if self.collection and len(self.checks) > 50:
+            pages = (len(self.checks) + 49) // 50
+            self.previous_button.configure(state="normal" if not busy and self.track_page else "disabled")
+            self.next_button.configure(state="normal" if not busy and self.track_page < pages - 1 else "disabled")
+        self._format_changed()
+        self._selection_changed()
+        if busy:
+            self.download_button.configure(text="Descargando…" if self.operation == "download" else "Revisando enlace…")
 
     def _close_app(self):
-        self._stop_activity()
+        self.after_cancel(self.event_job)
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
