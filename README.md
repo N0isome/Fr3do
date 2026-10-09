@@ -15,7 +15,7 @@ Descarga audio de canciones y playlists de **YouTube y SoundCloud**, e importa c
 
 ## Instalar desde código
 
-Recomendado: Python 3.11 de 64 bits y FFmpeg en `PATH`. Descarga el repositorio completo, incluyendo `assets/`.
+Recomendado: Python 3.11 de 64 bits y FFmpeg y Deno en `PATH`. Descarga el repositorio completo, incluyendo `assets/`.
 
 En PowerShell, desde la carpeta del proyecto:
 
@@ -34,13 +34,14 @@ Si Windows bloquea la activación del entorno, usa directamente:
 .\.venv\Scripts\python.exe main.py
 ```
 
-Para instalar FFmpeg:
+Para instalar FFmpeg y el motor JavaScript que utiliza yt-dlp con YouTube:
 
 ```powershell
 winget install --id Gyan.FFmpeg --exact
+winget install --id DenoLand.Deno --exact
 ```
 
-Abre una nueva terminal y comprueba `ffmpeg -version`. Reinicia FR3DO después de instalarlo.
+Abre una nueva terminal y comprueba `ffmpeg -version` y `deno --version`. Reinicia FR3DO después de instalarlo.
 
 Qt también puede ejecutarse en Linux/macOS con un escritorio compatible; el desenfoque nativo de esta versión se implementa únicamente para Windows.
 
@@ -74,7 +75,7 @@ Demucs necesita más espacio, memoria y tiempo de procesamiento; 8 GB de RAM es 
 
 ## Ejecutable para Windows
 
-El workflow **Windows build** comprueba la aplicación, genera `FR3DO-Windows.zip` con PyInstaller y publica la versión `v0.2.0` al integrarse en `main`. El ejecutable necesita FFmpeg en `PATH`; no necesita instalar Python. Descomprime toda la carpeta y abre `FR3DO.exe`. Un binario sin firma puede activar avisos de Windows.
+El workflow **Windows build** comprueba la aplicación, genera `FR3DO-Windows.zip` con PyInstaller y publica la versión `v0.2.0` al integrarse en `main`. El ejecutable necesita FFmpeg y Deno en `PATH`; no necesita instalar Python. Descomprime toda la carpeta y abre `FR3DO.exe`. Un binario sin firma puede activar avisos de Windows.
 
 ## Validación
 
@@ -90,6 +91,7 @@ Las pruebas verifican selección, paginación, cambios de enlace, opciones de ex
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp): fuentes de audio.
 - [SpotipyFree](https://github.com/TzurSoffer/spotipyFree): metadatos públicos de Spotify.
 - [FFmpeg](https://ffmpeg.org/): conversión.
+- [Deno](https://docs.deno.com/runtime/getting_started/installation/): motor JavaScript para los desafíos de YouTube ([yt-dlp EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS)).
 - [Demucs](https://github.com/facebookresearch/demucs): separación opcional.
 
 Usa contenido propio o para el que tengas autorización.
