@@ -1,147 +1,95 @@
-# Fr3do Audio Extractor
+# FR3DO · Crystal
 
-Aplicación de escritorio en Python para descargar canciones y playlists de YouTube y SoundCloud, e importar canciones, álbumes y playlists de Spotify buscando versiones en YouTube en WAV o MP3 a 320 kbps. Opcionalmente separa el audio con Demucs en cuatro stems WAV: `vocals`, `drums`, `bass` y `other`.
+Descarga audio de canciones y playlists de **YouTube y SoundCloud**, e importa canciones, álbumes y playlists públicas de **Spotify**, buscando versiones de audio en YouTube.
 
-> Utiliza la aplicación únicamente con contenido propio, con licencia o para el que tengas autorización. Respeta los derechos de autor y los términos aplicables.
+![FR3DO en rosa y negro](docs/crystal-rosa.png)
 
-## 1. Requisitos recomendados
+*Captura real de la interfaz con una lista de demostración. En esta captura se usa el fondo oscuro de compatibilidad; el escritorio desenfocado se activa en Windows.*
 
-- Windows 10 u 11 de 64 bits.
-- Python 3.11 de 64 bits.
-- VS Code con la extensión oficial **Python**.
-- FFmpeg disponible en `PATH`.
-- Al menos 8 GB de RAM para Demucs. La descarga y conversión funcionan sin GPU; la separación en CPU tarda más.
+## Interfaz
 
-## 2. Crear el proyecto desde PowerShell
+- Marca FR3DO, monograma F y superficies redondeadas.
+- Paletas **rosa + negro**, **naranjo + negro** y **celeste + negro**, desde los tres círculos de la barra superior. La elección queda guardada.
+- Interruptor **Cristal**: usa Acrylic nativo para ver el escritorio desenfocado en Windows 10 (1809+) y Windows 11. La disponibilidad depende del compositor y las opciones visuales de Windows. Si no está disponible, se conserva una superficie oscura legible. Windows 11 también permite esquinas nativas redondeadas.
+- Sin animaciones continuas ni filtros calculados por la aplicación. El trabajo de descarga corre fuera del hilo de la interfaz.
 
-Abre PowerShell y ejecuta:
+## Instalar desde código
 
-```powershell
-New-Item -ItemType Directory -Force "C:\Users\PROV_ARF\Documents\App 2\Fr3do"
-Set-Location "C:\Users\PROV_ARF\Documents\App 2\Fr3do"
-```
+Recomendado: Python 3.11 de 64 bits y FFmpeg en `PATH`. Descarga el repositorio completo, incluyendo `assets/`.
 
-Copia `main.py`, `sources.py`, `requirements.txt` y este `README.md` dentro de esa carpeta.
-
-## 3. Crear y activar el entorno virtual
+En PowerShell, desde la carpeta del proyecto:
 
 ```powershell
 py -3.11 -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip setuptools wheel
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python main.py
 ```
 
-Si `py -3.11` no existe, instala Python 3.11 desde python.org marcando **Add Python to PATH**.
+Si Windows bloquea la activación del entorno, usa directamente:
 
-## 4. Instalar FFmpeg
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
+```
 
-Opción recomendada con `winget`:
+Para instalar FFmpeg:
 
 ```powershell
 winget install --id Gyan.FFmpeg --exact
 ```
 
-Cierra y vuelve a abrir PowerShell después de instalarlo. Comprueba:
+Abre una nueva terminal y comprueba `ffmpeg -version`. Reinicia FR3DO después de instalarlo.
+
+Qt también puede ejecutarse en Linux/macOS con un escritorio compatible; el desenfoque nativo de esta versión se implementa únicamente para Windows.
+
+## Uso
+
+1. Pega un enlace de YouTube, SoundCloud o Spotify público y pulsa **Revisar enlace**.
+2. Selecciona las pistas. Un doble clic abre la fuente para escucharla antes de descargar.
+3. Elige MP3, WAV o FLAC, y la carpeta de destino.
+4. Pulsa **Descargar selección**. **Ver actividad** muestra los detalles y errores.
+
+Las listas grandes tienen páginas de 50 pistas y conservan la selección. Las playlists se guardan en una carpeta propia. No se sobrescriben archivos anteriores; si una pista falla, el lote continúa. `fr3do-resultados.json` guarda el resultado de cada pista. Convertir a MP3 de 320 kbps, WAV o FLAC no aumenta la calidad de la fuente.
+
+## Spotify público, sin Client ID
+
+Esta versión no pide Client ID, Client Secret, cookies ni inicio de sesión. Usa **SpotipyFree** para consultar metadatos públicos. No hace falta crear una aplicación en el panel de Spotify.
+
+**El audio viene de YouTube, no de Spotify.** La lista muestra el título encontrado y el original de Spotify. Las coincidencias empiezan desmarcadas para que revises y elijas versiones; la búsqueda no garantiza que sean la misma grabación.
+
+Admite enlaces `https://open.spotify.com/playlist/...`, `/album/...` y `/track/...`. Las listas privadas, pistas locales y episodios quedan fuera de este modo. El proveedor público es experimental y puede cambiar, bloquear solicitudes o dejar de responder: no se garantiza disponibilidad permanente ni ilimitada. Un fallo de Spotify no impide revisar enlaces de YouTube o SoundCloud.
+
+## Separar instrumentos (opcional)
+
+La instalación básica no incluye PyTorch/Demucs. Para activar **Separar en 4 stems** al ejecutar desde Python:
 
 ```powershell
-ffmpeg -version
-```
-
-Si `ffmpeg` no se reconoce, reinicia VS Code o Windows para refrescar `PATH`.
-
-## 5. Instalar las dependencias
-
-Con el entorno virtual activado:
-
-```powershell
-pip install -r requirements.txt
-```
-
-Demucs instalará PyTorch y puede ocupar bastante espacio. Si la instalación automática de PyTorch falla y usarás solo CPU:
-
-```powershell
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-```
-
-Verifica los componentes:
-
-```powershell
-python -c "import customtkinter, yt_dlp; print('GUI y descarga OK')"
-python -m demucs --help
-ffmpeg -version
-```
-
-## 6. Ejecutar desde VS Code
-
-```powershell
-code "C:\Users\PROV_ARF\Documents\App 2\Fr3do"
-```
-
-En VS Code:
-
-1. Presiona `Ctrl+Shift+P`.
-2. Selecciona **Python: Select Interpreter**.
-3. Elige `.venv\Scripts\python.exe`.
-4. Abre `main.py` y presiona **Run Python File**, o ejecuta:
-
-```powershell
+python -m pip install -r requirements-stems.txt
 python main.py
 ```
 
-## 7. Uso
+Demucs necesita más espacio, memoria y tiempo de procesamiento; 8 GB de RAM es una referencia práctica para uso en CPU. La primera ejecución descarga su modelo. Crea voces, batería, bajo y otros en WAV. Si termina correctamente, elimina el audio intermedio. La edición ejecutable básica no incluye esta función.
 
-1. Elige la carpeta de salida con **Cambiar carpeta**.
-2. Selecciona **WAV** o **MP3**. Convertir a 320 kbps no mejora la calidad original.
-3. Activa **Separar instrumentos** si quieres separar cada canción con Demucs.
-4. Pega un enlace de YouTube, SoundCloud o Spotify y pulsa **Revisar enlace**.
-5. Revisa la lista, selecciona todas o algunas pistas y pulsa **Descargar pistas**.
+## Ejecutable para Windows
 
-Los enlaces de video de YouTube que incluyan `list=` se analizan como playlist. Para descargar solo el video, usa su enlace sin ese parámetro. Las pistas privadas, retiradas o restringidas pueden omitirse o fallar.
+El workflow **Windows build** comprueba la aplicación, genera `FR3DO-Windows.zip` con PyInstaller y publica la versión `v0.2.0` al integrarse en `main`. El ejecutable necesita FFmpeg en `PATH`; no necesita instalar Python. Descomprime toda la carpeta y abre `FR3DO.exe`. Un binario sin firma puede activar avisos de Windows.
 
-Las playlists se guardan en una carpeta con su nombre. Cada pista conserva su índice original; las canciones repetidas tienen nombres distintos. En modo 4-STEM se crea una subcarpeta por canción con las cuatro pistas WAV. El WAV intermedio se elimina cuando la separación termina correctamente.
-
-La selección está integrada en la ventana principal; las opciones de guardado están a la derecha. El progreso indica canción actual y total seleccionado. La barra conserva el último avance conocido durante FFmpeg y Demucs, sin animaciones. Las listas grandes muestran 50 pistas por página y conservan la selección entre páginas. El detalle de errores se abre con **Ver actividad**. Si una canción falla, la aplicación continúa con las demás y muestra un resultado parcial. `fr3do-resultados.json` registra fuentes, archivos guardados y errores. No se sobrescriben carpetas ni archivos anteriores.
-
-## 8. Conectar Spotify
-
-Spotify aporta nombres y artistas; **el audio se obtiene desde YouTube**, nunca desde Spotify. No se garantiza que la coincidencia sea la misma versión. La vista previa muestra ambos títulos y un botón **Abrir** para revisar la fuente. Las coincidencias comienzan desmarcadas y requieren selección explícita.
-
-1. Crea una app en https://developer.spotify.com/dashboard.
-2. Registra exactamente `http://127.0.0.1:8888/callback` como Redirect URI.
-3. Copia el **Client ID**, pulsa **Conectar Spotify** e introdúcelo. No hace falta Client Secret.
-4. Pega un enlace `https://open.spotify.com/playlist/...`, `/album/...` o `/track/...`.
-5. Autoriza el acceso en el navegador del equipo donde ejecutas Fr3do.
-
-También puedes definir el Client ID antes de ejecutar, en PowerShell:
-
-```powershell
-$env:SPOTIPY_CLIENT_ID = "tu_client_id"
-python main.py
-```
-
-Se utiliza OAuth PKCE y los tokens permanecen en memoria durante la importación, sin archivos de credenciales. Una nueva importación puede requerir autorización nuevamente. El puerto local 8888 debe estar libre.
-
-**Restricciones actuales de Spotify (2026):** en modo desarrollo, el dueño de la app debe tener Premium y el contenido de playlists solo se devuelve si el usuario conectado es dueño o colaborador. Los usuarios deben estar habilitados en la app. Una playlist pública de otra persona puede resultar inaccesible. Las pistas locales y episodios se omiten. La API puede limitar solicitudes.
-
-Referencias oficiales:
-- https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide
-- https://developer.spotify.com/documentation/web-api/reference/get-playlists-items
-
-## 9. Pruebas
+## Validación
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Las pruebas verifican resolución y paginación con respuestas simuladas, continuidad ante errores y conservación de archivos. Las pruebas de interfaz validan selección, navegación entre páginas, cambio de enlace y opciones de guardado; requieren una pantalla disponible (se omiten en entornos sin escritorio). No requieren cuentas ni descargan música. Las descargas reales y la autorización de Spotify requieren una prueba en el equipo de destino.
+Las pruebas verifican selección, paginación, cambios de enlace, opciones de exportación, errores de fuentes, fallos parciales y archivos sin sobrescritura. Usan fuentes simuladas: no verifican la disponibilidad permanente de servicios externos. La apariencia nativa Acrylic debe comprobarse en Windows.
 
-## Solución de problemas
+## Dependencias
 
-- **FFmpeg no está instalado o no aparece en PATH:** reinicia PowerShell/VS Code y ejecuta `ffmpeg -version`.
-- **Demucs no se reconoce:** confirma que `.venv` está activado y ejecuta `python -m demucs --help`.
-- **Demucs se queda sin memoria:** cierra programas pesados. La primera ejecución también descarga el modelo de separación.
-- **YouTube rechaza la descarga:** actualiza yt-dlp con `python -m pip install -U yt-dlp`.
-- **PowerShell bloquea Activate.ps1:** ejecuta `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` en esa misma ventana.
+- [PySide6 / Qt](https://doc.qt.io/qtforpython-6/): interfaz.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp): fuentes de audio.
+- [SpotipyFree](https://github.com/TzurSoffer/spotipyFree): metadatos públicos de Spotify.
+- [FFmpeg](https://ffmpeg.org/): conversión.
+- [Demucs](https://github.com/facebookresearch/demucs): separación opcional.
 
+Usa contenido propio o para el que tengas autorización.

@@ -1,0 +1,3 @@
+-r requirements.txt
+numpy
+demucs>=4,<5

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sources
-from main import AudioExtractorApp
+from downloads import DownloadEngine as AudioExtractorApp
 
 
 class SourceTests(unittest.TestCase):
@@ -53,12 +53,12 @@ class SourceTests(unittest.TestCase):
     def test_spotify_pagination_and_new_item_field(self):
         client = MagicMock()
         client.playlist.return_value = {"name": "List"}
-        client._get.return_value = {"items": [{"item": {"name": "A"}}], "next": "next"}
+        client.playlist_items.return_value = {"items": [{"item": {"name": "A"}}], "next": "next"}
         client.next.return_value = {"items": [{"track": {"name": "B"}}, {"item": None}], "next": None}
         name, tracks = sources.spotify_tracks(client, "playlist", "abc")
         self.assertEqual(name, "List")
         self.assertEqual([t["name"] if t else None for t in tracks], ["A", "B", None])
-        client._get.assert_called_once_with("playlists/abc/items", limit=50)
+        client.playlist_items.assert_called_once_with("abc")
 
     @patch("sources.yt_dlp.YoutubeDL")
     @patch("sources.spotify_client")
@@ -77,11 +77,16 @@ class SourceTests(unittest.TestCase):
         self.assertIn("download", cls.return_value.__enter__.return_value.extract_info.call_args.kwargs)
         self.assertFalse(cls.return_value.__enter__.return_value.extract_info.call_args.kwargs["download"])
 
+    def test_public_spotify_never_requests_login_or_isrc_service(self):
+        module = SimpleNamespace(Spotify=MagicMock())
+        with patch.dict(sys.modules, {"SpotipyFree": module}):
+            sources.spotify_client()
+        module.Spotify.assert_called_once_with(login=False, getIsrc=False)
+
     @patch("sources.spotify_client")
     def test_spotify_access_denied_is_actionable(self, client):
-        import spotipy
-        client.side_effect = spotipy.SpotifyException(403, -1, "Forbidden")
-        with self.assertRaisesRegex(ValueError, "propia o colaborativa"):
+        client.side_effect = RuntimeError("Forbidden")
+        with self.assertRaisesRegex(ValueError, "playlist pública"):
             sources.resolve("https://open.spotify.com/playlist/abc", client_id="id")
 
 
@@ -119,7 +124,7 @@ class BatchTests(unittest.TestCase):
             AudioExtractorApp._batch_worker(app, sources.Collection("Demo", tracks, False), tracks, "mp3", Path(folder), False)
             self.assertEqual(app.events.get()[0], "failure")
 
-    @patch("main.yt_dlp.YoutubeDL")
+    @patch("downloads.yt_dlp.YoutubeDL")
     def test_single_track_moves_converted_file_and_cleans_temp(self, cls):
         with tempfile.TemporaryDirectory() as folder:
             app = self.app()

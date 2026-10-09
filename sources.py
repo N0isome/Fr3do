@@ -1,8 +1,6 @@
 """Resolve supported sources without downloading audio."""
 from dataclasses import dataclass
-import os
 import re
-import secrets
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -77,35 +75,10 @@ def resolve(url, emit=lambda message: None, client_id=None):
     return Collection(info.get("title") or "Playlist", tracks, playlist, skipped=skipped)
 
 
-def spotify_client(client_id):
-    import spotipy
-    from spotipy.cache_handler import MemoryCacheHandler
-    from spotipy.oauth2 import SpotifyPKCE
-    from spotipy.oauth2 import SpotifyOauthError, start_local_http_server
-    client_id = client_id or os.environ.get("SPOTIPY_CLIENT_ID")
-    if not client_id:
-        raise ValueError("Configura tu Client ID de Spotify para importar la lista.")
-    # Tokens stay in memory; no secrets or token files enter the repository.
-    class DesktopPKCE(SpotifyPKCE):
-        def _get_auth_response_local_server(self, redirect_port):
-            server = start_local_http_server(redirect_port)
-            server.timeout = 120
-            try:
-                self._open_auth_url()
-                server.handle_request()
-                if not server.auth_code:
-                    raise SpotifyOauthError("Autorización cancelada o sin respuesta después de 120 segundos.")
-                if server.state != self.state:
-                    raise SpotifyOauthError("La respuesta de autorización no coincide con esta sesión.")
-                return server.auth_code
-            finally:
-                server.server_close()
-
-    auth = DesktopPKCE(client_id=client_id, state=secrets.token_urlsafe(32),
-                       redirect_uri="http://127.0.0.1:8888/callback",
-                       scope="playlist-read-private playlist-read-collaborative",
-                       cache_handler=MemoryCacheHandler(), open_browser=True)
-    return spotipy.Spotify(auth_manager=auth, requests_timeout=20, retries=2)
+def spotify_client(client_id=None):
+    # Public metadata only. Never load cookies or start an interactive login.
+    from SpotipyFree import Spotify
+    return Spotify(login=False, getIsrc=False)
 
 
 def spotify_tracks(client, kind, identifier):
@@ -114,13 +87,12 @@ def spotify_tracks(client, kind, identifier):
         return track["name"], [track]
     if kind == "album":
         album = client.album(identifier)
-        page = album["tracks"]
+        page = client.album_tracks(identifier)
         title = album["name"]
     else:
         playlist = client.playlist(identifier)
         title = playlist["name"]
-        # /items is the current API; older Spotipy helpers may still use /tracks.
-        page = client._get(f"playlists/{identifier}/items", limit=50)
+        page = client.playlist_items(identifier)
     tracks = []
     while page:
         for item in page.get("items", []):
@@ -130,26 +102,25 @@ def spotify_tracks(client, kind, identifier):
 
 
 def resolve_spotify(url, emit, client_id):
-    import spotipy
     match = re.fullmatch(r"/(playlist|album|track)/([A-Za-z0-9]+)/*", urlparse(url).path)
     if not match:
         raise ValueError("Usa un enlace Spotify de playlist, álbum o canción.")
-    emit("SPOTIFY // Autoriza el acceso en el navegador; el audio vendrá de YouTube.")
+    emit("SPOTIFY // Leyendo lista pública sin llave; el audio vendrá de YouTube.")
     try:
         title, entries = spotify_tracks(spotify_client(client_id), *match.groups())
-    except spotipy.SpotifyException as exc:
-        if exc.http_status == 403:
-            raise ValueError("Spotify denegó el acceso. En modo desarrollo usa una playlist propia o colaborativa y verifica los usuarios autorizados de tu app.") from None
-        if exc.http_status == 429:
+    except Exception as exc:
+        status = getattr(exc, "http_status", None) or getattr(exc, "status_code", None)
+        if status == 429:
             raise ValueError("Spotify limitó las solicitudes. Intenta más tarde.") from None
-        raise ValueError("No se pudo leer Spotify. Revisa tu conexión y autorización.") from None
+        raise ValueError("No se pudo leer Spotify público. Usa una canción, álbum o playlist pública. Las listas privadas requieren acceso autorizado; este modo no inicia sesión. Si la lista es pública, puede haber un cambio temporal del proveedor.") from None
     tracks, skipped = [], 0
     with yt_dlp.YoutubeDL(dict(quiet=True, extract_flat=True, socket_timeout=20, retries=3)) as ydl:
         for index, track in enumerate(entries, 1):
             if not track or track.get("is_local") or track.get("type", "track") != "track":
                 skipped += 1
                 continue
-            original = ", ".join(a["name"] for a in track.get("artists", [])) + " — " + track["name"]
+            artists = [a.get("name") or a.get("profile", {}).get("name", "") for a in track.get("artists", [])]
+            original = ", ".join(a for a in artists if a) + " — " + track["name"]
             emit(f"MATCH // {index}/{len(entries)}: {original}")
             try:
                 info = ydl.extract_info("ytsearch1:" + original + " official audio", download=False)
